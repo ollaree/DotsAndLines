@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dots & Lines Online</title>
+    <style>
+        body{background-color:#1a1a1a;color:#f0f0f0;font-family:'Menlo','Monaco','Courier New',monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;overflow:hidden}#game-container{width:100vw;height:100vh;display:flex;flex-direction:column;background-color:#0d0d0d}#status-bar{display:flex;justify-content:space-between;padding:10px 15px;font-size:16px;border-bottom:1px solid #444;background-color:#252525;flex-shrink:0}.score{width:120px;font-weight:bold}#p1-score{color:#e74c3c}#p2-score{color:#3498db;text-align:right}#turn-indicator{text-align:center;flex-grow:1;transition:color .3s ease}.active-turn::after{content:'_';animation:blink 1s step-end infinite}@keyframes blink{50%{opacity:0}}#game-board{width:100%;flex-grow:1;cursor:pointer}.modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background-color:rgba(0,0,0,.85);display:flex;justify-content:center;align-items:center;z-index:1000;transition:opacity .3s ease}.modal-content{background-color:#1e1e1e;padding:30px 40px;border:1px solid #555;text-align:center;max-width:500px}.modal-content h1{margin-top:0;font-size:24px;color:#f0f0f0;letter-spacing:2px}.modal-content p{color:#aaa;line-height:1.6}.modal-controls{display:flex;flex-direction:column;gap:15px;margin-top:20px}.control-group{display:flex;align-items:center;gap:10px}#create-game-btn,#join-game-btn,#restart-game-btn{background-color:#333;color:#f0f0f0;border:1px solid #666;padding:12px 20px;font-family:inherit;font-size:16px;cursor:pointer;transition:background-color .2s;flex-grow:1}#create-game-btn:hover,#join-game-btn:hover,#restart-game-btn:hover{background-color:#4CAF50;border-color:#4CAF50}#game-id-input{padding:12px;font-family:inherit;background-color:#333;border:1px solid #666;color:#f0f0f0;text-transform:uppercase}.hidden{opacity:0;pointer-events:none}.difficulty-slider{margin:25px 0 15px;text-align:center}#difficulty-label{margin-top:10px;font-size:16px;color:#ccc;font-weight:bold;min-height:20px}input[type=range]{-webkit-appearance:none;appearance:none;width:80%;margin-top:10px;background:0 0}input[type=range]:focus{outline:0}input[type=range]::-webkit-slider-runnable-track{width:100%;height:10px;cursor:pointer;background:#3498db;border-radius:5px}input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;border:2px solid #1a1a1a;height:24px;width:24px;border-radius:50%;background:#f0f0f0;cursor:pointer;margin-top:-7px}
+    </style>
+</head>
+<body>
+
+    <div id="setup-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h1>DOTS & LINES</h1>
+            <p>Create a new game or join an existing one using a Game ID.</p>
+            <div class="difficulty-slider">
+                <label for="density-slider">Grid Size</label>
+                <input type="range" id="density-slider" min="3" max="10" value="5" step="1">
+                <div id="difficulty-label">5 x 5</div>
+            </div>
+            <div class="modal-controls">
+                <button id="create-game-btn">Create New Game</button>
+                <div class="control-group">
+                    <input type="text" id="game-id-input" placeholder="Enter Game ID">
+                    <button id="join-game-btn">Join Game</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="game-over-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h1 id="winner-text"></h1>
+            <p id="final-score-text"></p>
+            <button id="restart-game-btn">Play Again</button>
+        </div>
+    </div>
+
+    <div id="game-container">
+        <div id="status-bar">
+            <div id="p1-score" class="score">P1: 0</div>
+            <div id="turn-indicator">Connecting...</div>
+            <div id="p2-score" class="score">P2: 0</div>
+        </div>
+        <canvas id="game-board"></canvas>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const canvas = document.getElementById('game-board'), ctx = canvas.getContext('2d');
+    const p1ScoreElement = document.getElementById('p1-score'), p2ScoreElement = document.getElementById('p2-score');
+    const turnIndicatorElement = document.getElementById('turn-indicator');
+    const setupModal = document.getElementById('setup-modal'), gameOverModal = document.getElementById('game-over-modal');
+    const createGameBtn = document.getElementById('create-game-btn'), joinGameBtn = document.getElementById('join-game-btn');
+    const gameIdInput = document.getElementById('game-id-input'), restartBtn = document.getElementById('restart-game-btn');
+    const winnerText = document.getElementById('winner-text'), finalScoreText = document.getElementById('final-score-text');
+    const densitySlider = document.getElementById('density-slider'), difficultyLabel = document.getElementById('difficulty-label');
+
+    let boxSize, dotRadius, gameState = {}, playerNumber = null, highlightedLine = null, ws;
+    const playerColors = { 1: { line: '#e74c3c', box: 'rgba(231, 76, 60, 0.5)' }, 2: { line: '#3498db', box: 'rgba(52, 152, 219, 0.5)' } };
+
+    function connect() {
+        ws = new WebSocket(`ws://${window.location.host}`);
+        ws.onopen = () => { console.log('Connected to game server.'); turnIndicatorElement.textContent = 'Ready'; };
+        ws.onmessage = (event) => {
+            const { type, payload } = JSON.parse(event.data);
+            switch (type) {
+                case 'gameCreated':
+                    playerNumber = 1;
+                    setupModal.classList.add('hidden');
+                    handleGameUpdate(payload);
+                    break;
+                case 'gameUpdate':
+                    if (!playerNumber) playerNumber = 2;
+                    setupModal.classList.add('hidden');
+                    handleGameUpdate(payload);
+                    break;
+                case 'opponentDisconnected':
+                    alert(payload.message);
+                    handleGameUpdate(payload.gameState);
+                    break;
+                case 'error':
+                    alert(`Error: ${payload.message}`);
+                    break;
+            }
+        };
+        ws.onclose = () => { turnIndicatorElement.textContent = "Connection Lost"; turnIndicatorElement.style.color = '#e74c3c'; };
+    }
+
+    function handleGameUpdate(serverState) {
+        gameState = serverState;
+        resizeCanvas();
+        updateStatus();
+        draw();
+        checkAndShowGameOver();
+    }
+
+    function resizeCanvas() {
+        if (!gameState.gridSize) return;
+        canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight;
+        const boardDim = Math.min(canvas.width, canvas.height);
+        const boardPadding = boardDim * 0.1;
+        boxSize = (boardDim - 2 * boardPadding) / gameState.gridSize;
+        dotRadius = boxSize * 0.08;
+        draw();
+    }
+    
+    function updateStatus() {
+        if (!gameState.scores) return;
+        p1ScoreElement.textContent = `P1: ${gameState.scores[1]}`;
+        p2ScoreElement.textContent = `P2: ${gameState.scores[2]}`;
+        turnIndicatorElement.classList.remove('active-turn');
+
+        if (gameState.status === 'waiting') {
+            turnIndicatorElement.textContent = `Waiting for opponent... Game ID: ${gameState.gameId}`;
+            turnIndicatorElement.style.color = '#ccc';
+        } else if (gameState.status === 'active') {
+            const isMyTurn = playerNumber === gameState.currentPlayer;
+            turnIndicatorElement.textContent = isMyTurn ? "Your Turn" : "Opponent's Turn";
+            turnIndicatorElement.style.color = playerColors[gameState.currentPlayer].line;
+            if (isMyTurn) turnIndicatorElement.classList.add('active-turn');
+            canvas.style.cursor = isMyTurn ? 'pointer' : 'not-allowed';
+        }
+    }
+
+    function checkAndShowGameOver() {
+        if (gameState.status === 'finished') {
+            let winnerMessage;
+            if (gameState.winner === 'draw') winnerMessage = "It's a Draw!";
+            else winnerMessage = `Player ${gameState.winner} Wins!`;
+            winnerText.textContent = winnerMessage;
+            finalScoreText.textContent = `Final Score: ${gameState.scores[1]} to ${gameState.scores[2]}`;
+            gameOverModal.classList.remove('hidden');
+        }
+    }
+
+    function draw() {
+        if (!gameState.gridSize) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.save();
+        const offsetX = (canvas.width - (gameState.gridSize * boxSize)) / 2, offsetY = (canvas.height - (gameState.gridSize * boxSize)) / 2;
+        ctx.translate(offsetX, offsetY);
+        drawBoxes(); drawLines(); drawDots(); drawHighlightedLine();
+        ctx.restore();
+    }
+
+    function drawDots() {
+        ctx.fillStyle = '#f0f0f0';
+        for (let y = 0; y <= gameState.gridSize; y++) for (let x = 0; x <= gameState.gridSize; x++) {
+            ctx.beginPath(); ctx.arc(x * boxSize, y * boxSize, dotRadius, 0, Math.PI * 2); ctx.fill();
+        }
+    }
+
+    function drawLines() {
+        ctx.lineWidth = dotRadius;
+        for (let y = 0; y <= gameState.gridSize; y++) for (let x = 0; x < gameState.gridSize; x++) if (gameState.horizontalLines[y][x]) {
+            ctx.strokeStyle = playerColors[gameState.horizontalLines[y][x]].line;
+            ctx.beginPath(); ctx.moveTo(x * boxSize, y * boxSize); ctx.lineTo((x + 1) * boxSize, y * boxSize); ctx.stroke();
+        }
+        for (let y = 0; y < gameState.gridSize; y++) for (let x = 0; x <= gameState.gridSize; x++) if (gameState.verticalLines[y][x]) {
+            ctx.strokeStyle = playerColors[gameState.verticalLines[y][x]].line;
+            ctx.beginPath(); ctx.moveTo(x * boxSize, y * boxSize); ctx.lineTo(x * boxSize, (y + 1) * boxSize); ctx.stroke();
+        }
+    }
+    
+    function drawBoxes() {
+        for (let y = 0; y < gameState.gridSize; y++) for (let x = 0; x < gameState.gridSize; x++) if (gameState.boxes[y][x]) {
+            ctx.fillStyle = playerColors[gameState.boxes[y][x]].box;
+            ctx.fillRect(x * boxSize, y * boxSize, boxSize, boxSize);
+        }
+    }
+
+    function drawHighlightedLine() {
+        if (!highlightedLine) return;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.lineWidth = dotRadius;
+        ctx.beginPath();
+        if (highlightedLine.type === 'h') { ctx.moveTo(highlightedLine.x * boxSize, highlightedLine.y * boxSize); ctx.lineTo((highlightedLine.x + 1) * boxSize, highlightedLine.y * boxSize); }
+        else { ctx.moveTo(highlightedLine.x * boxSize, highlightedLine.y * boxSize); ctx.lineTo(highlightedLine.x * boxSize, (highlightedLine.y + 1) * boxSize); }
+        ctx.stroke();
+    }
+
+    function getHighlightedLine(e) {
+        if (!gameState.gridSize || gameState.status !== 'active' || playerNumber !== gameState.currentPlayer) return null;
+        const rect = canvas.getBoundingClientRect();
+        const boardOffsetX = (canvas.width - (gameState.gridSize * boxSize)) / 2, boardOffsetY = (canvas.height - (gameState.gridSize * boxSize)) / 2;
+        const x = e.clientX - rect.left - boardOffsetX, y = e.clientY - rect.top - boardOffsetY;
+        const gridX = Math.floor(x / boxSize), gridY = Math.floor(y / boxSize);
+        const clickX = (x / boxSize) - gridX, clickY = (y / boxSize) - gridY;
+        let bestDist = 0.25, bestLine = null;
+        if (gridX >= 0 && gridX < gameState.gridSize && gridY >= 0 && gridY <= gameState.gridSize) { const dist = Math.abs(clickY); if (dist < bestDist && !gameState.horizontalLines[gridY][gridX]) { bestDist = dist; bestLine = { type: 'h', x: gridX, y: gridY }; } }
+        if (gridX >= 0 && gridX < gameState.gridSize && gridY >= -1 && gridY < gameState.gridSize) { const dist = Math.abs(clickY - 1); if (dist < bestDist && !gameState.horizontalLines[gridY + 1][gridX]) { bestDist = dist; bestLine = { type: 'h', x: gridX, y: gridY + 1 }; } }
+        if (gridY >= 0 && gridY < gameState.gridSize && gridX >= 0 && gridX <= gameState.gridSize) { const dist = Math.abs(clickX); if (dist < bestDist && !gameState.verticalLines[gridY][gridX]) { bestDist = dist; bestLine = { type: 'v', x: gridX, y: gridY }; } }
+        if (gridY >= 0 && gridY < gameState.gridSize && gridX >= -1 && gridX < gameState.gridSize) { const dist = Math.abs(clickX - 1); if (dist < bestDist && !gameState.verticalLines[gridY][gridX + 1]) { bestDist = dist; bestLine = { type: 'v', x: gridX + 1, y: gridY }; } }
+        return bestLine;
+    }
+    
+    densitySlider.addEventListener('input', (e) => { difficultyLabel.textContent = `${e.target.value} x ${e.target.value}`; });
+    createGameBtn.addEventListener('click', () => { ws.send(JSON.stringify({ type: 'createGame', payload: { gridSize: parseInt(densitySlider.value, 10) } })); });
+    joinGameBtn.addEventListener('click', () => { const gameId = gameIdInput.value.trim().toUpperCase(); if (gameId) ws.send(JSON.stringify({ type: 'joinGame', payload: { gameId } })); });
+    restartBtn.addEventListener('click', () => { window.location.reload(); });
+    window.addEventListener('resize', resizeCanvas);
+    canvas.addEventListener('mousemove', (e) => { const oldHighlight = highlightedLine; highlightedLine = getHighlightedLine(e); if (JSON.stringify(oldHighlight) !== JSON.stringify(highlightedLine)) draw(); });
+    canvas.addEventListener('click', () => { if (!highlightedLine) return; ws.send(JSON.stringify({ type: 'makeMove', payload: { line: highlightedLine } })); highlightedLine = null; draw(); });
+    connect();
+});
+</script>
+</body>
+</html>
