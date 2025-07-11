@@ -1,4 +1,3 @@
-
 const express = require('express');
 const http = require('http');
 const path = require('path');
@@ -7,6 +6,9 @@ const { WebSocketServer } = require('ws');
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
+
+// Serve static files from the root directory
+app.use(express.static(__dirname));
 
 // Serve the index.html file
 app.get('/', (req, res) => {
@@ -72,12 +74,9 @@ function checkGameOver(game) {
     return game.scores[1] + game.scores[2] === game.gridSize * game.gridSize;
 }
 
-// ** NEW: Function to create a clean, sendable version of the game state **
-// This is the key fix, inspired by your working 20 Questions server.js
+// Function to create a clean, sendable version of the game state
 function getSanitizedGameState(game, gameId) {
     if (!game) return null;
-    // This new object only contains data safe to send as JSON.
-    // It excludes the raw WebSocket objects (player1, player2).
     return {
         gameId: gameId,
         gridSize: game.gridSize,
@@ -131,7 +130,7 @@ wss.on('connection', (ws) => {
 
                 ws.send(JSON.stringify({
                     type: 'gameCreated',
-                    payload: getSanitizedGameState(games[gameId], gameId) // Use sanitized state
+                    payload: getSanitizedGameState(games[gameId], gameId)
                 }));
                 break;
             }
@@ -150,7 +149,7 @@ wss.on('connection', (ws) => {
                     gameToJoin.status = 'active';
                     ws.gameId = gameId;
 
-                    const message = { type: 'gameUpdate', payload: getSanitizedGameState(gameToJoin, gameId) }; // Use sanitized state
+                    const message = { type: 'gameUpdate', payload: getSanitizedGameState(gameToJoin, gameId) };
                     if (gameToJoin.player1) gameToJoin.player1.send(JSON.stringify(message));
                     if (gameToJoin.player2) gameToJoin.player2.send(JSON.stringify(message));
                 } else {
@@ -190,7 +189,7 @@ wss.on('connection', (ws) => {
                     game.currentPlayer = game.currentPlayer === 1 ? 2 : 1;
                 }
 
-                const updatedMessage = { type: 'gameUpdate', payload: getSanitizedGameState(game, ws.gameId) }; // Use sanitized state
+                const updatedMessage = { type: 'gameUpdate', payload: getSanitizedGameState(game, ws.gameId) };
                 if (game.player1) game.player1.send(JSON.stringify(updatedMessage));
                 if (game.player2) game.player2.send(JSON.stringify(updatedMessage));
 
@@ -211,7 +210,6 @@ wss.on('connection', (ws) => {
             if (otherPlayer && otherPlayer.readyState === 1) {
                 otherPlayer.send(JSON.stringify({
                     type: 'opponentDisconnected',
-                    // Also send final game state so the winner can see the final board
                     payload: { 
                         message: 'Your opponent has disconnected. You win!',
                         gameState: getSanitizedGameState(game, ws.gameId) 
@@ -223,6 +221,8 @@ wss.on('connection', (ws) => {
     });
 });
 
-server.listen(8080, () => {
-    console.log('Server is listening on port 8080.');
+// Use environment port or default to 8080, bind to 0.0.0.0 for Render
+const port = process.env.PORT || 8080;
+server.listen(port, '0.0.0.0', () => {
+    console.log(`Server running at http://0.0.0.0:${port}`);
 });
