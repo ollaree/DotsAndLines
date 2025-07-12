@@ -61,7 +61,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const playerColors = { 1: { line: '#e74c3c', box: 'rgba(231, 76, 60, 0.5)' }, 2: { line: '#3498db', box: 'rgba(52, 152, 219, 0.5)' } };
 
     function connect() {
-        ws = new WebSocket(`ws://${window.location.host}`);
+        // ** FIX: Dynamically set WebSocket protocol for deployment **
+        const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        ws = new WebSocket(`${protocol}://${window.location.host}`);
+        
         ws.onopen = () => { console.log('Connected to game server.'); turnIndicatorElement.textContent = 'Ready'; };
         ws.onmessage = (event) => {
             const { type, payload } = JSON.parse(event.data);
@@ -203,6 +206,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('resize', resizeCanvas);
     canvas.addEventListener('mousemove', (e) => { const oldHighlight = highlightedLine; highlightedLine = getHighlightedLine(e); if (JSON.stringify(oldHighlight) !== JSON.stringify(highlightedLine)) draw(); });
     canvas.addEventListener('click', () => { if (!highlightedLine) return; ws.send(JSON.stringify({ type: 'makeMove', payload: { line: highlightedLine } })); highlightedLine = null; draw(); });
+    
     connect();
 });
 </script>
