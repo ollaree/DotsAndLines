@@ -1,4 +1,3 @@
-
 const express = require('express');
 const http = require('http');
 const path = require('path');
@@ -6,18 +5,22 @@ const { WebSocketServer } = require('ws');
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
 
-// Serve the index.html file
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
+// ** FIX: Attach WebSocket Server robustly to the HTTP server **
+const wss = new WebSocketServer({ noServer: true });
+server.on('upgrade', (request, socket, head) => {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+    });
 });
+
+// Serve the index.html file and any other static assets
+app.use(express.static(path.join(__dirname)));
 
 // In-memory storage for games
 const games = {};
 
 // --- Game Logic Helper Functions ---
-
 function checkNewBoxes(line, game) {
     let boxCompleted = false;
     const { gridSize, horizontalLines, verticalLines, boxes, currentPlayer } = game;
@@ -72,12 +75,8 @@ function checkGameOver(game) {
     return game.scores[1] + game.scores[2] === game.gridSize * game.gridSize;
 }
 
-// ** NEW: Function to create a clean, sendable version of the game state **
-// This is the key fix, inspired by your working 20 Questions server.js
 function getSanitizedGameState(game, gameId) {
     if (!game) return null;
-    // This new object only contains data safe to send as JSON.
-    // It excludes the raw WebSocket objects (player1, player2).
     return {
         gameId: gameId,
         gridSize: game.gridSize,
@@ -119,8 +118,8 @@ wss.on('connection', (ws) => {
                     player1: ws,
                     player2: null,
                     gridSize: gridSize,
-                    horizontalLines: Array(gridSize + 1).fill(0).map(() => Array(gridSize).fill(0)),
-                    verticalLines: Array(gridSize).fill(0).map(() => Array(gridSize + 1).fill(0)),
+                    horizontalLines: Array(gridSize + 1).fill(0).map(() => Array(gridSize).fill(false)),
+                    verticalLines: Array(gridSize).fill(0).map(() => Array(gridSize + 1).fill(false)),
                     boxes: Array(gridSize).fill(0).map(() => Array(gridSize).fill(0)),
                     scores: { 1: 0, 2: 0 },
                     currentPlayer: 1,
@@ -131,7 +130,7 @@ wss.on('connection', (ws) => {
 
                 ws.send(JSON.stringify({
                     type: 'gameCreated',
-                    payload: getSanitizedGameState(games[gameId], gameId) // Use sanitized state
+                    payload: getSanitizedGameState(games[gameId], gameId)
                 }));
                 break;
             }
@@ -150,7 +149,7 @@ wss.on('connection', (ws) => {
                     gameToJoin.status = 'active';
                     ws.gameId = gameId;
 
-                    const message = { type: 'gameUpdate', payload: getSanitizedGameState(gameToJoin, gameId) }; // Use sanitized state
+                    const message = { type: 'gameUpdate', payload: getSanitizedGameState(gameToJoin, gameId) };
                     if (gameToJoin.player1) gameToJoin.player1.send(JSON.stringify(message));
                     if (gameToJoin.player2) gameToJoin.player2.send(JSON.stringify(message));
                 } else {
@@ -164,7 +163,7 @@ wss.on('connection', (ws) => {
                 if (!game) return;
 
                 const playerNumber = (ws.id === game.player1.id) ? 1 : 2;
-                if (playerNumber !== game.currentPlayer) return; // Not this player's turn
+                if (playerNumber !== game.currentPlayer) return;
 
                 const { line } = payload;
                 let boxMade = false;
@@ -176,7 +175,7 @@ wss.on('connection', (ws) => {
                     game.verticalLines[line.y][line.x] = game.currentPlayer;
                     boxMade = checkNewBoxes(line, game);
                 } else {
-                    return; // Invalid move
+                    return;
                 }
 
                 updateScores(game);
@@ -190,7 +189,7 @@ wss.on('connection', (ws) => {
                     game.currentPlayer = game.currentPlayer === 1 ? 2 : 1;
                 }
 
-                const updatedMessage = { type: 'gameUpdate', payload: getSanitizedGameState(game, ws.gameId) }; // Use sanitized state
+                const updatedMessage = { type: 'gameUpdate', payload: getSanitizedGameState(game, ws.gameId) };
                 if (game.player1) game.player1.send(JSON.stringify(updatedMessage));
                 if (game.player2) game.player2.send(JSON.stringify(updatedMessage));
 
@@ -204,25 +203,26 @@ wss.on('connection', (ws) => {
         if (game) {
             const isPlayer1 = game.player1 && game.player1.id === ws.id;
             game.status = 'finished';
-            game.winner = isPlayer1 ? 2 : 1; // The other player wins
+            game.winner = isPlayer1 ? 2 : 1; 
 
             const otherPlayer = isPlayer1 ? game.player2 : game.player1;
 
             if (otherPlayer && otherPlayer.readyState === 1) {
                 otherPlayer.send(JSON.stringify({
                     type: 'opponentDisconnected',
-                    // Also send final game state so the winner can see the final board
                     payload: { 
                         message: 'Your opponent has disconnected. You win!',
                         gameState: getSanitizedGameState(game, ws.gameId) 
                     }
                 }));
             }
-            delete games[ws.gameId]; // Clean up the game room
+            delete games[ws.gameId];
         }
     });
 });
 
-server.listen(8080, () => {
-    console.log('Server is listening on port 8080.');
+// ** FIX: Use environment variable for port and listen on 0.0.0.0 **
+const PORT = process.env.PORT || 8080;
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server is listening on port ${PORT}`);
 });
